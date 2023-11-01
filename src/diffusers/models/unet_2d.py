@@ -12,7 +12,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 from dataclasses import dataclass
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Dict
 
 import torch
 import torch.nn as nn
@@ -22,6 +22,9 @@ from ..utils import BaseOutput
 from .embeddings import GaussianFourierProjection, TimestepEmbedding, Timesteps
 from .modeling_utils import ModelMixin
 from .unet_2d_blocks import UNetMidBlock2D, get_down_block, get_up_block
+from .attention_processor import (
+    AttentionProcessor,
+)
 
 
 @dataclass
@@ -99,8 +102,18 @@ class UNet2DModel(ModelMixin, ConfigMixin):
         time_embedding_type: str = "positional",
         freq_shift: int = 0,
         flip_sin_to_cos: bool = True,
-        down_block_types: Tuple[str] = ("DownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D", "AttnDownBlock2D"),
-        up_block_types: Tuple[str] = ("AttnUpBlock2D", "AttnUpBlock2D", "AttnUpBlock2D", "UpBlock2D"),
+        down_block_types: Tuple[str] = (
+            "DownBlock2D",
+            "AttnDownBlock2D",
+            "AttnDownBlock2D",
+            "AttnDownBlock2D",
+        ),
+        up_block_types: Tuple[str] = (
+            "AttnUpBlock2D",
+            "AttnUpBlock2D",
+            "AttnUpBlock2D",
+            "UpBlock2D",
+        ),
         block_out_channels: Tuple[int] = (224, 448, 672, 896),
         layers_per_block: int = 2,
         mid_block_scale_factor: float = 1,
@@ -135,14 +148,20 @@ class UNet2DModel(ModelMixin, ConfigMixin):
             )
 
         # input
-        self.conv_in = nn.Conv2d(in_channels, block_out_channels[0], kernel_size=3, padding=(1, 1))
+        self.conv_in = nn.Conv2d(
+            in_channels, block_out_channels[0], kernel_size=3, padding=(1, 1)
+        )
 
         # time
         if time_embedding_type == "fourier":
-            self.time_proj = GaussianFourierProjection(embedding_size=block_out_channels[0], scale=16)
+            self.time_proj = GaussianFourierProjection(
+                embedding_size=block_out_channels[0], scale=16
+            )
             timestep_input_dim = 2 * block_out_channels[0]
         elif time_embedding_type == "positional":
-            self.time_proj = Timesteps(block_out_channels[0], flip_sin_to_cos, freq_shift)
+            self.time_proj = Timesteps(
+                block_out_channels[0], flip_sin_to_cos, freq_shift
+            )
             timestep_input_dim = block_out_channels[0]
 
         self.time_embedding = TimestepEmbedding(timestep_input_dim, time_embed_dim)
@@ -178,7 +197,9 @@ class UNet2DModel(ModelMixin, ConfigMixin):
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
-                attention_head_dim=attention_head_dim if attention_head_dim is not None else output_channel,
+                attention_head_dim=attention_head_dim
+                if attention_head_dim is not None
+                else output_channel,
                 downsample_padding=downsample_padding,
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 downsample_type=downsample_type,
@@ -195,7 +216,9 @@ class UNet2DModel(ModelMixin, ConfigMixin):
             resnet_act_fn=act_fn,
             output_scale_factor=mid_block_scale_factor,
             resnet_time_scale_shift=resnet_time_scale_shift,
-            attention_head_dim=attention_head_dim if attention_head_dim is not None else block_out_channels[-1],
+            attention_head_dim=attention_head_dim
+            if attention_head_dim is not None
+            else block_out_channels[-1],
             resnet_groups=norm_num_groups,
             attn_groups=attn_norm_num_groups,
             add_attention=add_attention,
@@ -207,7 +230,9 @@ class UNet2DModel(ModelMixin, ConfigMixin):
         for i, up_block_type in enumerate(up_block_types):
             prev_output_channel = output_channel
             output_channel = reversed_block_out_channels[i]
-            input_channel = reversed_block_out_channels[min(i + 1, len(block_out_channels) - 1)]
+            input_channel = reversed_block_out_channels[
+                min(i + 1, len(block_out_channels) - 1)
+            ]
 
             is_final_block = i == len(block_out_channels) - 1
 
@@ -222,7 +247,9 @@ class UNet2DModel(ModelMixin, ConfigMixin):
                 resnet_eps=norm_eps,
                 resnet_act_fn=act_fn,
                 resnet_groups=norm_num_groups,
-                attention_head_dim=attention_head_dim if attention_head_dim is not None else output_channel,
+                attention_head_dim=attention_head_dim
+                if attention_head_dim is not None
+                else output_channel,
                 resnet_time_scale_shift=resnet_time_scale_shift,
                 upsample_type=upsample_type,
                 dropout=dropout,
@@ -231,10 +258,18 @@ class UNet2DModel(ModelMixin, ConfigMixin):
             prev_output_channel = output_channel
 
         # out
-        num_groups_out = norm_num_groups if norm_num_groups is not None else min(block_out_channels[0] // 4, 32)
-        self.conv_norm_out = nn.GroupNorm(num_channels=block_out_channels[0], num_groups=num_groups_out, eps=norm_eps)
+        num_groups_out = (
+            norm_num_groups
+            if norm_num_groups is not None
+            else min(block_out_channels[0] // 4, 32)
+        )
+        self.conv_norm_out = nn.GroupNorm(
+            num_channels=block_out_channels[0], num_groups=num_groups_out, eps=norm_eps
+        )
         self.conv_act = nn.SiLU()
-        self.conv_out = nn.Conv2d(block_out_channels[0], out_channels, kernel_size=3, padding=1)
+        self.conv_out = nn.Conv2d(
+            block_out_channels[0], out_channels, kernel_size=3, padding=1
+        )
 
     def forward(
         self,
@@ -267,12 +302,16 @@ class UNet2DModel(ModelMixin, ConfigMixin):
         # 1. time
         timesteps = timestep
         if not torch.is_tensor(timesteps):
-            timesteps = torch.tensor([timesteps], dtype=torch.long, device=sample.device)
+            timesteps = torch.tensor(
+                [timesteps], dtype=torch.long, device=sample.device
+            )
         elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
             timesteps = timesteps[None].to(sample.device)
 
         # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-        timesteps = timesteps * torch.ones(sample.shape[0], dtype=timesteps.dtype, device=timesteps.device)
+        timesteps = timesteps * torch.ones(
+            sample.shape[0], dtype=timesteps.dtype, device=timesteps.device
+        )
 
         t_emb = self.time_proj(timesteps)
 
@@ -284,7 +323,9 @@ class UNet2DModel(ModelMixin, ConfigMixin):
 
         if self.class_embedding is not None:
             if class_labels is None:
-                raise ValueError("class_labels should be provided when doing class conditioning")
+                raise ValueError(
+                    "class_labels should be provided when doing class conditioning"
+                )
 
             if self.config.class_embed_type == "timestep":
                 class_labels = self.time_proj(class_labels)
@@ -315,10 +356,14 @@ class UNet2DModel(ModelMixin, ConfigMixin):
         skip_sample = None
         for upsample_block in self.up_blocks:
             res_samples = down_block_res_samples[-len(upsample_block.resnets) :]
-            down_block_res_samples = down_block_res_samples[: -len(upsample_block.resnets)]
+            down_block_res_samples = down_block_res_samples[
+                : -len(upsample_block.resnets)
+            ]
 
             if hasattr(upsample_block, "skip_conv"):
-                sample, skip_sample = upsample_block(sample, res_samples, emb, skip_sample)
+                sample, skip_sample = upsample_block(
+                    sample, res_samples, emb, skip_sample
+                )
             else:
                 sample = upsample_block(sample, res_samples, emb)
 
@@ -331,10 +376,82 @@ class UNet2DModel(ModelMixin, ConfigMixin):
             sample += skip_sample
 
         if self.config.time_embedding_type == "fourier":
-            timesteps = timesteps.reshape((sample.shape[0], *([1] * len(sample.shape[1:]))))
+            timesteps = timesteps.reshape(
+                (sample.shape[0], *([1] * len(sample.shape[1:])))
+            )
             sample = sample / timesteps
 
         if not return_dict:
             return (sample,)
 
         return UNet2DOutput(sample=sample)
+
+    @property
+    def attn_processors(self) -> Dict[str, AttentionProcessor]:
+        r"""
+        Returns:
+            `dict` of attention processors: A dictionary containing all attention processors used in the model with
+            indexed by its weight name.
+        """
+        # set recursively
+        processors = {}
+
+        def fn_recursive_add_processors(
+            name: str,
+            module: torch.nn.Module,
+            processors: Dict[str, AttentionProcessor],
+        ):
+            if hasattr(module, "get_processor"):
+                processors[f"{name}.processor"] = module.get_processor(
+                    return_deprecated_lora=True
+                )
+
+            for sub_name, child in module.named_children():
+                fn_recursive_add_processors(f"{name}.{sub_name}", child, processors)
+
+            return processors
+
+        for name, module in self.named_children():
+            fn_recursive_add_processors(name, module, processors)
+
+        return processors
+
+    def set_attn_processor(
+        self,
+        processor: Union[AttentionProcessor, Dict[str, AttentionProcessor]],
+        _remove_lora=False,
+    ):
+        r"""
+        Sets the attention processor to use to compute attention.
+
+        Parameters:
+            processor (`dict` of `AttentionProcessor` or only `AttentionProcessor`):
+                The instantiated processor class or a dictionary of processor classes that will be set as the processor
+                for **all** `Attention` layers.
+
+                If `processor` is a dict, the key needs to define the path to the corresponding cross attention
+                processor. This is strongly recommended when setting trainable attention processors.
+
+        """
+        count = len(self.attn_processors.keys())
+
+        if isinstance(processor, dict) and len(processor) != count:
+            raise ValueError(
+                f"A dict of processors was passed, but the number of processors {len(processor)} does not match the"
+                f" number of attention layers: {count}. Please make sure to pass {count} processor classes."
+            )
+
+        def fn_recursive_attn_processor(name: str, module: torch.nn.Module, processor):
+            if hasattr(module, "set_processor"):
+                if not isinstance(processor, dict):
+                    module.set_processor(processor, _remove_lora=_remove_lora)
+                else:
+                    module.set_processor(
+                        processor.pop(f"{name}.processor"), _remove_lora=_remove_lora
+                    )
+
+            for sub_name, child in module.named_children():
+                fn_recursive_attn_processor(f"{name}.{sub_name}", child, processor)
+
+        for name, module in self.named_children():
+            fn_recursive_attn_processor(name, module, processor)
